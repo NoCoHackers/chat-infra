@@ -37,4 +37,19 @@ jobs:
             git push origin "HEAD:refs/heads/$branch"
           fi
           printf '\nValidated locally in the updater. No production credentials were used, and merging does not deploy. Review upstream changes and take a fresh backup before applying manually.\n' >> "$RUNNER_TEMP/updates.md"
-          gh pr create --base main --head "$branch" --title 'Update upstream Matrix stack pins' --body-file "$RUNNER_TEMP/updates.md"
+          if gh pr create --base main --head "$branch" --title 'Update upstream Matrix stack pins' --body-file "$RUNNER_TEMP/updates.md" 2>"$RUNNER_TEMP/pr-create-error"; then
+            exit 0
+          else
+            status=$?
+            cat "$RUNNER_TEMP/pr-create-error" >&2
+            if ! grep -Fq 'GitHub Actions is not permitted to create or approve pull requests' "$RUNNER_TEMP/pr-create-error"; then
+              exit "$status"
+            fi
+          fi
+          echo "::warning::GitHub Actions cannot create pull requests under the current policy; a maintainer must open this proposal manually."
+          {
+            echo "## Manual upstream update proposal"
+            echo "GitHub Actions could not create a pull request due to repository or organization policy."
+            echo "[Open a pull request for ${branch}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1) and copy the update details below into its description."
+            cat "$RUNNER_TEMP/updates.md"
+          } >> "$GITHUB_STEP_SUMMARY"
