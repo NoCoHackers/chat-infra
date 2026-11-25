@@ -1,0 +1,107 @@
+---
+- name: Schedule conditional Ubuntu maintenance reboots
+  hosts: matrix_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create persistent maintenance state directory
+      ansible.builtin.file:
+        path: /var/lib/noco-maintenance
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Install maintenance commands without running them
+      ansible.builtin.copy:
+        src: '{{ item.src }}'
+        dest: '/usr/local/sbin/{{ item.name }}'
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - { src: scripts/maintenance-notice.py, name: noco-maintenance-notice }
+        - { src: scripts/noco-reboot, name: noco-reboot }
+        - { src: scripts/reboot-schedule.py, name: noco-reboot-schedule }
+    - name: Install maintenance reboot units
+      ansible.builtin.copy:
+        dest: '/etc/systemd/system/{{ item.name }}'
+        owner: root
+        group: root
+        mode: '0644'
+        content: '{{ item.content }}'
+      loop:
+        - name: noco-maintenance-reboot.service
+          content: |
+            [Unit]
+            Description=Reboot NoCo Matrix host if Ubuntu requests it
+            ConditionPathExists=/run/reboot-required
+
+            [Service]
+            Type=oneshot
+            TimeoutStartSec=30min
+            ExecStart=/usr/bin/systemctl start noco-matrix-backup.service
+            ExecStart=/usr/local/sbin/noco-maintenance-notice start
+            ExecStart=/usr/bin/systemctl --no-block reboot
+        - name: noco-maintenance-reboot.timer
+          content: |
+            [Unit]
+            Description=Sunday maintenance window for NoCo Matrix
+
+            [Timer]
+            OnCalendar=Sun *-*-* 05:00:00 America/Denver
+            Persistent=false
+            AccuracySec=1s
+
+            [Install]
+            WantedBy=timers.target
+        - name: noco-maintenance-complete.service
+          content: |
+            [Unit]
+            Description=Post Matrix maintenance completion after reboot
+            ConditionPathExists=/var/lib/noco-maintenance/pending
+            [Service]
+            Type=oneshot
+            UMask=0077
+            ExecStart=/usr/local/sbin/noco-maintenance-notice end
+        - name: noco-maintenance-complete.timer
+          content: |
+            [Unit]
+            Description=Retry pending maintenance completion notices
+            [Timer]
+            OnBootSec=2min
+            OnUnitActiveSec=5min
+            [Install]
+            WantedBy=timers.target
+        - name: noco-one-off-reboot.service
+          content: |
+            [Unit]
+            Description=Check for a scheduled one-off Matrix reboot
+            ConditionPathExists=/var/lib/noco-maintenance/scheduled-reboot.json
+            [Service]
+            Type=oneshot
+            UMask=0077
+            TimeoutStartSec=6min
+            ExecStart=/usr/local/sbin/noco-reboot-schedule tick
+        - name: noco-one-off-reboot.timer
+          content: |
+            [Unit]
+            Description=Check the one-off Matrix reboot schedule every 15 seconds
+            [Timer]
+            OnCalendar=*-*-* *:*:00/15 UTC
+            AccuracySec=1s
+            Persistent=false
+            [Install]
+            WantedBy=timers.target
+    - name: Verify systemd units before enabling the timers
+      ansible.builtin.command: systemd-analyze verify /etc/systemd/system/noco-maintenance-reboot.service /etc/systemd/system/noco-maintenance-reboot.timer /etc/systemd/system/noco-maintenance-complete.service /etc/systemd/system/noco-maintenance-complete.timer /etc/systemd/system/noco-one-off-reboot.service /etc/systemd/system/noco-one-off-reboot.timer
+      changed_when: false
+    - name: Enable the timer without starting the reboot service
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+        daemon_reload: true
+        enabled: true
+        state: started
+      loop:
+        - noco-maintenance-reboot.timer
+        - noco-maintenance-complete.timer
+        - noco-one-off-reboot.timer

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+umask 077
+if [ "$(id -u)" -ne 0 ]; then echo 'Run as root.' >&2; exit 1; fi
+case "$#:${1-}" in
+  0:) /usr/local/sbin/noco-maintenance-notice manual ;;
+  2:schedule|1:status|1:cancel) exec /usr/local/sbin/noco-reboot-schedule "$@" ;;
+  1:--without-notice) echo 'Emergency override: rebooting without a maintenance notice.' >&2 ;;
+  *) echo 'Usage: noco-reboot [--without-notice | schedule "YYYY-MM-DD HH:MM UTC" | status | cancel]' >&2; exit 2 ;;
+esac
+exec /usr/bin/systemctl --no-block reboot

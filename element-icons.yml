@@ -1,0 +1,14 @@
+---
+- hosts: matrix_servers
+  gather_facts: false
+  tasks:
+    - name: Create Element icon directory
+      ansible.builtin.file:
+        path: /matrix/noco-element-icons
+        state: directory
+        mode: '0755'
+    - name: Publish Element icon assets
+      ansible.builtin.copy:
+        src: assets/element/
+        dest: /matrix/noco-element-icons/
+        mode: '0644'

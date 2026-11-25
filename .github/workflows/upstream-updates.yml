@@ -1,0 +1,40 @@
+name: Propose upstream updates
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: upstream-update-pr
+  cancel-in-progress: false
+jobs:
+  propose:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Find and validate updates
+        run: |
+          python3 scripts/check-upstream.py --apply > "$RUNNER_TEMP/updates.md"
+          python3 -m pip install PyYAML==6.0.3
+          bash -n scripts/deploy.sh
+          python3 scripts/validate.py
+          git diff --check
+      - name: Open a review-only pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git diff --quiet -- upstream-revision ooye/versions.json && exit 0
+          branch="automation/upstream-$(git diff -- upstream-revision ooye/versions.json | sha256sum | cut -c1-16)"
+          if [[ $(gh pr list --head "$branch" --state all --json number --jq length) != 0 ]]; then exit 0; fi
+          if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git switch -c "$branch"
+            git add upstream-revision ooye/versions.json
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Propose upstream Matrix stack updates'
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          printf '\nValidated locally in the updater. No production credentials were used, and merging does not deploy. Review upstream changes and take a fresh backup before applying manually.\n' >> "$RUNNER_TEMP/updates.md"
+          gh pr create --base main --head "$branch" --title 'Update upstream Matrix stack pins' --body-file "$RUNNER_TEMP/updates.md"

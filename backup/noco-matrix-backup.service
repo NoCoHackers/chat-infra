@@ -1,0 +1,16 @@
+[Unit]
+Description=Encrypted NoCo Matrix backup
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+RuntimeDirectory=noco-matrix-backup
+RuntimeDirectoryMode=0700
+Environment=RESTIC_REPOSITORY=s3:https://sfo3.digitaloceanspaces.com/nocohackers-matrix-backups/restic
+Environment=RESTIC_PASSWORD_FILE=/etc/noco-matrix-backup/restic-password
+EnvironmentFile=/etc/noco-matrix-backup/spaces.env
+EnvironmentFile=-/etc/noco-matrix-backup/heartbeat.env
+ExecStart=/usr/local/sbin/noco-matrix-backup
+ExecStartPost=/bin/sh -ec 'if [ -n "$${BACKUP_HEARTBEAT_URL:-}" ]; then exec /usr/bin/curl -fsS --retry 3 --max-time 10 --output /dev/null "$${BACKUP_HEARTBEAT_URL}" 2>/dev/null; fi'

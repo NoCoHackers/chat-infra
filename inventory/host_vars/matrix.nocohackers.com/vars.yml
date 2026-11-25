@@ -1,0 +1,71 @@
+---
+matrix_playbook_migration_validated_version: v2026.05.18.0
+# Permanent identity domain: @alice:nocohackers.com. The HTTPS endpoint is
+# matrix.nocohackers.com; Amplify serves apex .well-known delegation.
+matrix_domain: nocohackers.com
+matrix_homeserver_implementation: synapse
+# Keep production on its existing major; major migrations are a separate operation.
+postgres_allowed_versions_custom: [18]
+matrix_server_fqn_matrix: matrix.nocohackers.com
+matrix_server_fqn_element: chat.nocohackers.com
+matrix_playbook_reverse_proxy_type: playbook-managed-traefik
+# Enable only after DNS and the private OOYE listener are ready.
+noco_ooye_route_enabled: true
+traefik_provider_configuration_extension_yaml: |
+  {% if noco_ooye_route_enabled | bool %}
+  http:
+    routers:
+      noco-ooye:
+        rule: 'Host(`bridge.nocohackers.com`) && !PathPrefix(`/_matrix`)'
+        entryPoints:
+          - {{ traefik_config_entrypoint_web_secure_name }}
+        service: noco-ooye
+        tls:
+          certResolver: {{ traefik_certResolver_primary }}
+    services:
+      noco-ooye:
+        loadBalancer:
+          servers:
+            - url: 'http://172.21.0.1:6693'
+  {% else %}
+  {}
+  {% endif %}
+# Apex website stays on Amplify.
+matrix_static_files_container_labels_base_domain_enabled: false
+devture_systemd_docker_base_ipv6_enabled: false
+matrix_client_element_enabled: true
+# Match the icon links in the pinned Element build; recheck on upgrades.
+matrix_client_element_container_extra_arguments:
+  - '--mount type=bind,src=/matrix/noco-element-icons/favicon.ico,dst=/app/favicon.ico,ro'
+  - '--mount type=bind,src=/matrix/noco-element-icons/24.97ab000.png,dst=/app/vector-icons/24.97ab000.png,ro'
+  - '--mount type=bind,src=/matrix/noco-element-icons/144.5a63bf2.png,dst=/app/vector-icons/144.5a63bf2.png,ro'
+  - '--mount type=bind,src=/matrix/noco-element-icons/512.7ce350d.png,dst=/app/vector-icons/512.7ce350d.png,ro'
+matrix_client_element_brand: "NoCo Hackers"
+matrix_client_element_configuration_extension_json: |
+  {"setting_defaults": {"use_system_theme": true}}
+matrix_client_element_branding_auth_header_logo_url: "https://nocohackers.com/images/noco-element-wordmark.svg"
+matrix_client_element_branding_welcome_background_url: "https://nocohackers.com/images/noco-element-background.svg"
+matrix_rtc_enabled: false
+coturn_enabled: false
+matrix_authentication_service_enabled: false
+exim_relay_enabled: false
+# Public pilot: anyone can register after verifying their email; no invite/token.
+# Account creation does not grant server or room administrative powers.
+matrix_synapse_enable_registration: true
+matrix_synapse_enable_registration_without_verification: false
+matrix_synapse_registration_requires_token: false
+matrix_synapse_registrations_require_3pid: ['email']
+# Direct authenticated SMTP relay; credentials/host/from supplied via secret vars.
+matrix_synapse_email_enabled: true
+matrix_synapse_email_smtp_port: 2525
+matrix_synapse_email_smtp_require_transport_security: true
+matrix_synapse_email_enable_notifs: false
+matrix_synapse_federation_enabled: true
+# Welcome new local users in the existing Matrix-native room.
+matrix_synapse_auto_join_rooms:
+  - '#welcome:nocohackers.com'
+  - '#noco-hackers-matrix:nocohackers.com'
+matrix_synapse_autocreate_auto_join_rooms: false
+# Provision this secret-bearing file on the host before applying Synapse config.
+matrix_synapse_app_service_config_files:
+  - /data/ooye-registration.yaml

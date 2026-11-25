@@ -1,0 +1,67 @@
+---
+- name: Manage nightly Matrix backups
+  hosts: matrix_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install backup dependencies
+      ansible.builtin.apt:
+        name: [restic, curl]
+        state: present
+    - name: Create protected credential directory without writing secrets
+      ansible.builtin.file:
+        path: /etc/noco-matrix-backup
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Install backup script
+      ansible.builtin.copy:
+        src: scripts/backup-matrix.sh
+        dest: /usr/local/sbin/noco-matrix-backup
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install backup units
+      ansible.builtin.copy:
+        src: 'backup/{{ item }}'
+        dest: '/etc/systemd/system/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - noco-matrix-backup.service
+        - noco-matrix-backup.timer
+    - name: Validate backup units
+      ansible.builtin.command: systemd-analyze verify /etc/systemd/system/noco-matrix-backup.service /etc/systemd/system/noco-matrix-backup.timer
+      changed_when: false
+      when: not ansible_check_mode
+    - name: Check for required credential files without reading their contents
+      ansible.builtin.stat:
+        path: '/etc/noco-matrix-backup/{{ item }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop: [spaces.env, restic-password]
+      register: backup_credentials
+    - name: Require provisioned credentials before enabling nightly backups
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - item.stat.uid | default(-1) == 0
+          - item.stat.mode | default('') == '0600'
+          - item.stat.size | default(0) > 0
+        fail_msg: 'Provision /etc/noco-matrix-backup/{{ item.item }} as a nonempty root-owned 0600 file, and initialize the encrypted repository before enabling backups.'
+      loop: '{{ backup_credentials.results }}'
+      when: noco_enable_backup_timer | default(false) | bool
+    - name: Reload systemd and opt in to the backup timer
+      ansible.builtin.systemd_service:
+        name: noco-matrix-backup.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+      when: noco_enable_backup_timer | default(false) | bool
+    - name: Reload systemd without changing timer state when staging only
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not (noco_enable_backup_timer | default(false) | bool)

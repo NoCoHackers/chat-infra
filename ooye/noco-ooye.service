@@ -1,0 +1,23 @@
+[Unit]
+Description=NoCo Hackers Discord–Matrix bridge (OOYE)
+Wants=network-online.target
+Requires=noco-ooye-firewall.service
+After=network-online.target noco-ooye-firewall.service
+
+[Service]
+User=ooye
+Group=ooye
+WorkingDirectory=/var/lib/noco-ooye
+Environment=PATH=/opt/noco-node/bin:/usr/bin:/bin
+ExecStart=/opt/noco-node/bin/npm run start
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/noco-ooye
+
+[Install]
+WantedBy=multi-user.target

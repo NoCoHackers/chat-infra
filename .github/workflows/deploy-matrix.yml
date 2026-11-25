@@ -1,0 +1,64 @@
+name: Deploy Matrix
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: matrix-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install controller
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ansible"
+          "$RUNNER_TEMP/ansible/bin/pip" install ansible==12.1.0 ansible-core==2.19.3
+          echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
+      - name: Prepare credentials
+        id: credentials
+        env:
+          SSH_KEY: ${{ secrets.MATRIX_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.MATRIX_SSH_KNOWN_HOSTS }}
+          EXTRA_VARS: ${{ secrets.MATRIX_EXTRA_VARS_JSON }}
+        run: |
+          set -eu
+          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS" && test -n "$EXTRA_VARS"
+          install -d -m 700 "$HOME/.ssh"
+          umask 077
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/matrix_deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$EXTRA_VARS" > "$RUNNER_TEMP/matrix-vars.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert all(d.get(k) for k in ("matrix_homeserver_generic_secret_key","postgres_connection_password","matrix_synapse_email_smtp_host","matrix_synapse_email_smtp_user","matrix_synapse_email_smtp_pass","matrix_synapse_email_notif_from"))' "$RUNNER_TEMP/matrix-vars.json"
+      - name: Back up production and announce the rollout
+        run: |
+          bash scripts/deploy-remote.sh backup
+          bash scripts/deploy-remote.sh start
+      - name: Apply pinned playbook
+        env:
+          DEPLOY_EXTRA_VARS_FILE: ${{ runner.temp }}/matrix-vars.json
+          ANSIBLE_PRIVATE_KEY_FILE: /home/runner/.ssh/matrix_deploy
+          ANSIBLE_HOST_KEY_CHECKING: "True"
+          ANSIBLE_SSH_ARGS: "-o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
+        run: bash scripts/deploy.sh
+      - name: Apply pinned OOYE and Node.js versions
+        run: bash scripts/deploy-remote.sh upgrade-bridge
+      - name: HTTPS health checks
+        run: |
+          curl --fail --silent --show-error --retry 6 --retry-delay 10 --retry-all-errors https://matrix.nocohackers.com/_matrix/client/versions | python3 -c 'import json,sys; assert json.load(sys.stdin)["versions"]'
+          curl --fail --silent --show-error https://chat.nocohackers.com/ >/dev/null
+          curl --fail --silent --show-error --retry 6 --retry-delay 5 https://bridge.nocohackers.com/ >/dev/null
+          bash scripts/deploy-remote.sh check-bridge
+      - name: Announce successful rollout
+        run: bash scripts/deploy-remote.sh complete
+      - name: Attempt to announce a rollout failure
+        if: ${{ failure() && steps.credentials.outcome == 'success' }}
+        continue-on-error: true
+        run: bash scripts/deploy-remote.sh failed
+      - name: Remove credentials
+        if: always()
+        run: rm -f "$HOME/.ssh/matrix_deploy" "$RUNNER_TEMP/matrix-vars.json"

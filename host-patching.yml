@@ -1,0 +1,36 @@
+---
+- name: Manage Ubuntu security updates
+  hosts: matrix_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Ensure unattended upgrades are installed
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: present
+    - name: Set nightly unattended upgrade policy
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99-noco-unattended-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          Unattended-Upgrade::Automatic-Reboot "false";
+    - name: Enable APT timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+    - name: Check whether the host needs a reboot
+      ansible.builtin.stat:
+        path: /run/reboot-required
+      register: reboot_marker
+    - name: Report pending reboot
+      ansible.builtin.debug:
+        msg: Ubuntu has requested a reboot. Schedule a maintenance window.
+      when: reboot_marker.stat.exists

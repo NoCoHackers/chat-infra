@@ -1,0 +1,4 @@
+.work/
+.secrets/
+*.retry
+__pycache__/
